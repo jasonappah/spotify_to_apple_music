@@ -9,33 +9,6 @@ from sqlalchemy.dialects.sqlite import insert
 dotenv.load_dotenv()
 
 
-def create_playlist(
-    playlist_name: str,
-    playlist_description: str,
-    public: bool = False,
-    song_ids: list = [],
-):
-    playlist = {
-        "attributes": {
-            "name": playlist_name,
-            "description": playlist_description,
-            "isPublic": public,
-        },
-        "relationships": {
-            "tracks": {"data": [{"id": song, "type": "songs"} for song in song_ids]}
-        },
-    }
-
-    res = requests.post(
-        "https://amp-api.music.apple.com/v1/me/library/playlists?art%5Burl%5D=f&l=en-US",
-        json=playlist,
-    )
-
-    created_playlist_id: str = res.json()["data"][0]["id"]
-
-    return created_playlist_id
-
-
 def import_spotify_csvs():
     csv_files = [f for f in os.listdir("data/spotify") if f.endswith(".csv")]
 
@@ -76,7 +49,7 @@ def import_spotify_csvs():
                         apple_track_name=None,
                         artists=artists,
                         isrc=row["ISRC"],
-                        spotify_album_id=album.id,
+                        album_id=album.id,
                     )
                     session.add(song)
                     session.commit()
@@ -106,18 +79,18 @@ def get_spotify_access_token():
 def fill_missing_spotify_artist_names():
     with Session(engine) as session:
         artists = session.query(Artist).filter(Artist.spotify_artist_name == None).all()
-
-        artist_uris: list[str] = [artist.spotify_artist_uri for artist in artists]
-        artist_uris_chunks = [
-            artist_uris[i : i + 50] for i in range(0, len(artist_uris), 50)
+        spotify_artist_uri_to_db_artist = {artist.spotify_artist_uri: artist for artist in artists}
+        spotify_artist_uris: list[str] = [artist.spotify_artist_uri for artist in artists]
+        chunked_spotify_artist_uris = [
+            spotify_artist_uris[i : i + 50] for i in range(0, len(spotify_artist_uris), 50)
         ]
 
-        for i, chunk in enumerate(artist_uris_chunks):
+        for chunk in chunked_spotify_artist_uris:
             spotify_artists = get_many_spotify_artists(chunk)
 
-            for k, spotify_artist in enumerate(spotify_artists["artists"]):
-                artist = artists[i * 50 + k]
-                artist.spotify_artist_name = spotify_artist["name"]
+            for spotify_artist in spotify_artists["artists"]:
+                db_artist = spotify_artist_uri_to_db_artist[f"spotify:artist:{spotify_artist['id']}"]
+                db_artist.spotify_artist_name = spotify_artist["name"]
             session.commit()
 
 
