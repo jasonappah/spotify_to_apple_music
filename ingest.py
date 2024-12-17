@@ -79,17 +79,24 @@ def get_spotify_access_token():
 def fill_missing_spotify_artist_names():
     with Session(engine) as session:
         artists = session.query(Artist).filter(Artist.spotify_artist_name == None).all()
-        spotify_artist_uri_to_db_artist = {artist.spotify_artist_uri: artist for artist in artists}
-        spotify_artist_uris: list[str] = [artist.spotify_artist_uri for artist in artists]
+        spotify_artist_uri_to_db_artist = {
+            artist.spotify_artist_uri: artist for artist in artists
+        }
+        spotify_artist_uris: list[str] = [
+            artist.spotify_artist_uri for artist in artists
+        ]
         chunked_spotify_artist_uris = [
-            spotify_artist_uris[i : i + 50] for i in range(0, len(spotify_artist_uris), 50)
+            spotify_artist_uris[i : i + 50]
+            for i in range(0, len(spotify_artist_uris), 50)
         ]
 
         for chunk in chunked_spotify_artist_uris:
             spotify_artists = get_many_spotify_artists(chunk)
 
             for spotify_artist in spotify_artists["artists"]:
-                db_artist = spotify_artist_uri_to_db_artist[f"spotify:artist:{spotify_artist['id']}"]
+                db_artist = spotify_artist_uri_to_db_artist[
+                    f"spotify:artist:{spotify_artist['id']}"
+                ]
                 db_artist.spotify_artist_name = spotify_artist["name"]
             session.commit()
 
