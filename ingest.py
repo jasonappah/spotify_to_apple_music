@@ -48,7 +48,7 @@ def import_spotify_csvs():
                         apple_track_id=None,
                         apple_track_name=None,
                         artists=artists,
-                        isrc=row["ISRC"],
+                        isrc=row["ISRC"].upper(),
                         album_id=album.id,
                     )
                     session.add(song)
