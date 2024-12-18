@@ -5,15 +5,10 @@ from sqlalchemy import create_engine
 class Album(SQLModel, table=True):
     id: int | None = Field(primary_key=True, default=None)
 
-    spotify_album_uri: str = Field(
-        unique=True, sa_column_kwargs=dict(sqlite_on_conflict_unique="REPLACE")
-    )
+    spotify_album_uri: str = Field(unique=True)
     spotify_album_name: str
     apple_album_id: str | None = Field(
         nullable=True,
-        sa_column_kwargs=dict(
-            sqlite_on_conflict_unique="REPLACE", sqlite_on_conflict_not_null="REPLACE"
-        ),
     )
     apple_album_name: str | None = Field(nullable=True)
     upc: str | None = Field(nullable=True)
@@ -29,9 +24,7 @@ class SongArtistLink(SQLModel, table=True):
 class Artist(SQLModel, table=True):
     id: int | None = Field(primary_key=True, default=None)
 
-    spotify_artist_uri: str = Field(
-        unique=True, sa_column_kwargs=dict(sqlite_on_conflict_unique="REPLACE")
-    )
+    spotify_artist_uri: str = Field(unique=True)
     spotify_artist_name: str | None = Field(nullable=True)
     apple_artist_id: str | None = Field(nullable=True)
     apple_artist_name: str | None = Field(nullable=True)
@@ -44,9 +37,7 @@ class Artist(SQLModel, table=True):
 class Song(SQLModel, table=True):
     id: int | None = Field(primary_key=True, default=None)
 
-    spotify_track_uri: str = Field(
-        unique=True, sa_column_kwargs=dict(sqlite_on_conflict_unique="REPLACE")
-    )
+    spotify_track_uri: str = Field(unique=True)
     spotify_track_name: str | None = Field(nullable=True)
     apple_track_id: str | None = Field(nullable=True)
     apple_track_name: str | None = Field(nullable=True)

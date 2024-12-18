@@ -4,6 +4,7 @@ import csv
 import os
 import dotenv
 from db import engine, Artist, Album, Song, Playlist, PlaylistTrack
+from sqlalchemy.dialects.sqlite import insert
 
 dotenv.load_dotenv()
 
@@ -18,45 +19,83 @@ def import_spotify_csvs():
                 reader = csv.DictReader(file)
                 playlist = Playlist(csv_path=csv_path, apple_playlist_id=None)
                 session.add(playlist)
-                session.commit()
 
                 for row in reader:
                     artist_uris = row["Artist URI(s)"].split(", ")
+
+                    # In the Exportify CSVs, artist names are comma-delimited in one column,
+                    # but we can't safely assume that splitting that column on commas will get
+                    # you the correct artist names since names can contain commas. Artist URIs
+                    # are also comma delmited and have a standard format that doesn't contain
+                    # commas, so we split that to determine how many artists are on the track,
+                    # then if there's only one artist, we use the name from the CSV. Otherwise,
+                    # we just hope the other artists have solo songs elsewhere in the CSV or the
+                    # database. Later we backfill artist names from Spotify using the artist URIs.
                     artist_name = (
                         row["Artist Name(s)"] if len(artist_uris) == 1 else None
                     )
 
-                    artists = [
-                        Artist(
-                            spotify_artist_uri=artist_uri,
-                            spotify_artist_name=artist_name,
-                            apple_artist_id=None,
-                            apple_artist_name=None,
+                    insert_artists_stmt = insert(Artist).values(
+                        [
+                            {
+                                "spotify_artist_uri": artist_uri,
+                                "spotify_artist_name": artist_name,
+                                "apple_artist_id": None,
+                                "apple_artist_name": None,
+                            }
+                            for artist_uri in artist_uris
+                        ]
+                    )
+
+                    if artist_name:
+                        insert_artists_stmt = insert_artists_stmt.on_conflict_do_update(
+                            index_elements=["spotify_artist_uri"],
+                            set_={
+                                "spotify_artist_name": artist_name,
+                            }
+                            if artist_name
+                            else {},
                         )
-                        for artist_uri in artist_uris
-                    ]
-                    session.add_all(artists)
-                    session.commit()
+                    else:
+                        insert_artists_stmt = insert_artists_stmt.on_conflict_do_update(
+                            index_elements=["spotify_artist_uri"],
+                            set_={
+                                "spotify_artist_uri": insert_artists_stmt.excluded.spotify_artist_uri
+                            },
+                        )
+                    insert_artists_stmt = insert_artists_stmt.returning(Artist)
+                    artists = [a for (a,) in session.execute(insert_artists_stmt).all()]
+                    assert len(artists) > 0
 
                     album = get_or_create_spotify_album(
                         row["Album URI"], row["Album Name"], session
                     )
-                    song = Song(
-                        spotify_track_uri=row["Track URI"],
-                        spotify_track_name=row["Track Name"],
-                        apple_track_id=None,
-                        apple_track_name=None,
-                        artists=artists,
-                        isrc=row["ISRC"].upper(),
-                        album_id=album.id,
-                    )
-                    session.add(song)
-                    session.commit()
 
+                    insert_song_stmt = (
+                        insert(Song)
+                        .values(
+                            {
+                                "spotify_track_uri": row["Track URI"],
+                                "spotify_track_name": row["Track Name"],
+                                "isrc": row["ISRC"].upper(),
+                                "album_id": album.id,
+                            }
+                        )
+                        .on_conflict_do_update(
+                            index_elements=["spotify_track_uri"],
+                            set_={
+                                "spotify_track_name": row["Track Name"],
+                            },
+                        )
+                        .returning(Song)
+                    )
+                    (song,) = session.execute(insert_song_stmt).one()
+
+                    song.artists = artists
                     playlist.playlist_tracks.append(
                         PlaylistTrack(
-                            playlist_id=playlist.id,
-                            song_id=song.id,
+                            playlist=playlist,
+                            song=song,
                             index=len(playlist.playlist_tracks),
                         )
                     )
@@ -129,21 +168,24 @@ def get_many_spotify_artists(artist_uris: list[str]):
 
 
 def get_or_create_spotify_album(album_uri: str, album_name: str, session: Session):
-    album: Album | None = session.exec(
-        select(Album).where(Album.spotify_album_uri == album_uri)
-    ).first()
-    if album:
-        return album
-
-    album = Album(
-        spotify_album_uri=album_uri,
-        spotify_album_name=album_name,
-        apple_album_id=None,
-        apple_album_name=None,
-        upc=None,
+    insert_album_stmt = (
+        insert(Album)
+        .values(
+            {
+                "spotify_album_uri": album_uri,
+                "spotify_album_name": album_name,
+            }
+        )
+        .on_conflict_do_update(
+            index_elements=["spotify_album_uri"],
+            set_={
+                "spotify_album_name": album_name,
+            },
+        )
+        .returning(Album)
     )
-    session.add(album)
-    session.commit()
+    (album,) = session.execute(insert_album_stmt).one()
+
     return album
 
 
