@@ -1,10 +1,9 @@
 import requests
-from sqlmodel import Session
+from sqlmodel import Session, select
 import csv
 import os
 import dotenv
 from db import engine, Artist, Album, Song, Playlist, PlaylistTrack
-from sqlalchemy.dialects.sqlite import insert
 
 dotenv.load_dotenv()
 
@@ -78,7 +77,9 @@ def get_spotify_access_token():
 
 def fill_missing_spotify_artist_names():
     with Session(engine) as session:
-        artists = session.query(Artist).filter(Artist.spotify_artist_name == None).all()
+        artists = session.exec(
+            select(Artist).where(Artist.spotify_artist_name == None)
+        ).all()
         spotify_artist_uri_to_db_artist = {
             artist.spotify_artist_uri: artist for artist in artists
         }
@@ -128,9 +129,9 @@ def get_many_spotify_artists(artist_uris: list[str]):
 
 
 def get_or_create_spotify_album(album_uri: str, album_name: str, session: Session):
-    album: Album | None = (
-        session.query(Album).filter(Album.spotify_album_uri == album_uri).first()
-    )
+    album: Album | None = session.exec(
+        select(Album).where(Album.spotify_album_uri == album_uri)
+    ).first()
     if album:
         return album
 
@@ -148,7 +149,7 @@ def get_or_create_spotify_album(album_uri: str, album_name: str, session: Sessio
 
 def fill_missing_spotify_album_upcs():
     with Session(engine) as session:
-        albums = session.query(Album).filter(Album.upc == None).all()
+        albums = session.exec(select(Album).where(Album.upc == None)).all()
 
         album_uris: list[str] = [album.spotify_album_uri for album in albums]
         album_uris_chunks = [

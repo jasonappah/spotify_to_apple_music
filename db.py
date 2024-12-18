@@ -1,4 +1,4 @@
-from sqlmodel import SQLModel, Field, Relationship
+from sqlmodel import SQLModel, Field, Relationship, select, Session
 from sqlalchemy import create_engine
 
 
@@ -63,9 +63,9 @@ class Song(SQLModel, table=True):
 class Playlist(SQLModel, table=True):
     id: int | None = Field(primary_key=True, default=None)
 
-    apple_playlist_id: str | None = Field(nullable=True)
-    apple_playlist_name: str | None = Field(nullable=True)
-    csv_path: str | None
+    apple_playlist_id: str | None = Field(nullable=True, default=None)
+    apple_playlist_name: str | None = Field(nullable=True, default=None)
+    csv_path: str | None = Field(nullable=True, default=None)
 
     playlist_tracks: list["PlaylistTrack"] = Relationship(back_populates="playlist")
 
@@ -77,6 +77,23 @@ class PlaylistTrack(SQLModel, table=True):
 
     playlist: Playlist = Relationship(back_populates="playlist_tracks")
     song: Song = Relationship(back_populates="playlist_tracks")
+
+
+class Config(SQLModel, table=True):
+    id: int | None = Field(primary_key=True, default=None)
+    apple_music_playlist_folder_id: str | None = Field(nullable=True, default=None)
+
+    @staticmethod
+    def get_or_create(session: Session):
+        config = session.exec(select(Config).limit(1)).first()
+        if config:
+            return config
+
+        config = Config()
+        with session.begin_nested():
+            session.add(config)
+            session.commit()
+        return config
 
 
 engine = create_engine("sqlite:///data/db.sqlite3")
