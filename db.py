@@ -22,8 +22,8 @@ class Album(SQLModel, table=True):
 
 
 class SongArtistLink(SQLModel, table=True):
-    song_id: str = Field(primary_key=True, foreign_key="song.id")
-    artist_id: str = Field(primary_key=True, foreign_key="artist.id")
+    song_id: int = Field(primary_key=True, foreign_key="song.id", default=None)
+    artist_id: int = Field(primary_key=True, foreign_key="artist.id", default=None)
 
 
 class Artist(SQLModel, table=True):
@@ -71,9 +71,10 @@ class Playlist(SQLModel, table=True):
 
 
 class PlaylistTrack(SQLModel, table=True):
-    playlist_id: str = Field(primary_key=True, foreign_key="playlist.id")
-    song_id: str = Field(primary_key=True, foreign_key="song.id")
-    index: int = Field(primary_key=True)
+    id: int | None = Field(primary_key=True, default=None)
+    playlist_id: int = Field(foreign_key="playlist.id", default=None)
+    song_id: int = Field(foreign_key="song.id", default=None)
+    index: int
 
     playlist: Playlist = Relationship(back_populates="playlist_tracks")
     song: Song = Relationship(back_populates="playlist_tracks")
@@ -85,7 +86,7 @@ class Config(SQLModel, table=True):
 
     @staticmethod
     def get_or_create(session: Session):
-        config = session.exec(select(Config).limit(1)).first()
+        config = session.exec(select(Config).limit(1)).one_or_none()
         if config:
             return config
 
