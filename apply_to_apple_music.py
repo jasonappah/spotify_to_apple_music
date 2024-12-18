@@ -1,6 +1,8 @@
 import requests
-from sqlmodel import Session
-from db import Song, engine
+from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
+from db import Song, engine, Playlist, Config, PlaylistTrack
+from datetime import datetime
 from dotenv import load_dotenv
 import os
 
@@ -35,51 +37,83 @@ def get_many_apple_music_catalog_songs_by_isrc(isrcs: list[str]):
     return res.json()["data"]
 
 
-with Session(engine) as session:
-    songs = session.query(Song).filter(Song.apple_track_id.is_(None)).all()
-    isrc_to_db_song = {song.isrc: song for song in songs}
+def link_songs_to_apple_music_by_isrc():
+    with Session(engine) as session:
+        songs = session.exec(select(Song).where(Song.apple_track_id == None)).all()
+        isrc_to_db_song = {song.isrc: song for song in songs}
 
-    song_chunks = [songs[i : i + 25] for i in range(0, len(songs), 25)]
-    seen_isrcs: set[str] = set()
+        song_chunks = [songs[i : i + 25] for i in range(0, len(songs), 25)]
+        seen_isrcs: set[str] = set()
 
-    for chunk in song_chunks:
-        catalog = get_many_apple_music_catalog_songs_by_isrc(
-            [song.isrc for song in chunk]
-        )
-        for catalog_song in catalog:
-            isrc = catalog_song["attributes"]["isrc"]
-            apple_track_name = catalog_song["attributes"]["name"]
-            if isrc not in isrc_to_db_song:
-                print(
-                    f"ISRC {isrc} not found in db. {apple_track_name} by {catalog_song['attributes']['artistName']}"
-                )
-                continue
-            db_song = isrc_to_db_song[isrc]
-            db_song.apple_track_id = catalog_song["id"]
-            db_song.apple_track_name = apple_track_name
-            if isrc in seen_isrcs:
-                print(
-                    f"ISRC {catalog_song['attributes']['isrc']} returned multiple songs"
-                )
+        for chunk in song_chunks:
+            catalog = get_many_apple_music_catalog_songs_by_isrc(
+                [song.isrc for song in chunk if song.isrc]
+            )
+            for catalog_song in catalog:
+                isrc = catalog_song["attributes"]["isrc"]
+                apple_track_name = catalog_song["attributes"]["name"]
+                if isrc not in isrc_to_db_song:
+                    print(
+                        f"ISRC {isrc} not found in db. {apple_track_name} by {catalog_song['attributes']['artistName']}"
+                    )
+                    continue
+                db_song = isrc_to_db_song[isrc]
+                db_song.apple_track_id = catalog_song["id"]
+                db_song.apple_track_name = apple_track_name
+                if isrc in seen_isrcs:
+                    print(
+                        f"Multiple songs on Apple Music have ISRC {catalog_song['attributes']['isrc']}"
+                    )
 
-        session.commit()
+            session.commit()
 
 
-def create_playlist(
+def _create_apple_music_playlist_folder(session: Session, name: str) -> str:
+    res = requests.post(
+        "https://api.music.apple.com/v1/me/library/playlist-folders",
+        json={"attributes": {"name": name}},
+        headers=APPLE_MUSIC_REQUEST_HEADERS,
+    )
+    res.raise_for_status()
+    json = res.json()
+    return json["data"][0]["id"]
+
+
+def _get_root_library_playlist_folder_id(session: Session):
+    config = Config.get_or_create(session)
+    if config.apple_music_playlist_folder_id:
+        return config.apple_music_playlist_folder_id
+
+    id = _create_apple_music_playlist_folder(session, "Spotify converted playlists")
+    config.apple_music_playlist_folder_id = id
+    session.commit()
+    return id
+
+
+def create_apple_music_playlist(
     playlist_name: str,
     playlist_description: str,
-    public: bool = False,
-    song_ids: list = [],
+    playlist_folder_id: str,
+    apple_music_song_ids: list[str] = [],
 ):
-    # TODO: maybe re impl this method using the public api so i don't need to keep track of so many different auth methods lol
     playlist = {
         "attributes": {
             "name": playlist_name,
             "description": playlist_description,
-            "isPublic": public,
+            "isPublic": False,
         },
         "relationships": {
-            "tracks": {"data": [{"id": song, "type": "songs"} for song in song_ids]}
+            "tracks": {
+                "data": [{"id": song, "type": "songs"} for song in apple_music_song_ids]
+            },
+            "parent": {
+                "data": [
+                    {
+                        "id": playlist_folder_id,
+                        "type": "library-playlist-folders",
+                    }
+                ]
+            },
         },
     }
 
@@ -89,8 +123,63 @@ def create_playlist(
         headers=APPLE_MUSIC_REQUEST_HEADERS,
         params={"art[url]": "f", "l": "en-US"},
     )
-    )
 
-    created_playlist_id: str = res.json()["data"][0]["id"]
+    try:
+        res.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        print(res.text)
+        raise e
+    json = res.json()
+    created_playlist_id: str = json["data"][0]["id"]
 
     return created_playlist_id
+
+
+def create_apple_music_playlist_from_db_playlist(
+    session: Session, playlist: Playlist, playlist_folder_id: str
+):
+    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    song_ids = [
+        track.song.apple_track_id
+        for track in sorted(playlist.playlist_tracks, key=lambda x: x.index)
+    ]
+    playlist_name = (
+        playlist.csv_path.split("/")[-1].replace("_", " ").replace(".csv", "").title()
+        if playlist.csv_path
+        else date
+    )
+    apple_playlist_id = create_apple_music_playlist(
+        playlist_name,
+        f"Created by Spotify to Apple Music import script on {date}",
+        playlist_folder_id,
+        [si for si in song_ids if si],
+    )
+    with session.begin_nested():
+        playlist.apple_playlist_name = playlist_name
+        playlist.apple_playlist_id = apple_playlist_id
+        session.commit()
+
+
+def create_apple_music_playlists_from_db_playlist():
+    with Session(engine) as session:
+        playlist_folder_id = _get_root_library_playlist_folder_id(session)
+        playlists = session.exec(
+            select(Playlist)
+            .options(
+                selectinload(Playlist.playlist_tracks).selectinload(PlaylistTrack.song)
+            )
+            .where(Playlist.apple_playlist_id == None)
+        ).all()
+        for playlist in playlists:
+            create_apple_music_playlist_from_db_playlist(
+                session, playlist, playlist_folder_id
+            )
+
+
+link_songs_to_apple_music_by_isrc()
+create_apple_music_playlists_from_db_playlist()
+
+# TODO: like all the songs on apple
+# TODO: follow all the artists on apple
+# TODO: investgate why sometimes create_apple_music_playlist function gets a 500 from apple even though the playlist is created as expected in the music app. returned err on 500: {"errors":[{"id":"<REDACTED_REQ_ID>","title":"Upstream Service Error","detail":"Service failure: Cloud Library","status":"500","code":"50001"}]}
+# TODO: maybe one day, semi real-time sync of playlists between platforms would be sick. would definitely need to get my own apple dev account for that tho :/
