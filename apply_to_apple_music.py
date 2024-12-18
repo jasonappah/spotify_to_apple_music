@@ -6,21 +6,30 @@ import os
 
 load_dotenv()
 
+# TODO: set storefront based on user credentials?
 ITUNES_STOREFRONT = "US"
+
+APPLE_MUSIC_REQUEST_HEADERS = headers = {
+    "Authorization": f"Bearer {os.getenv('APPLE_DEVELOPER_TOKEN')}",
+    "Music-User-Token": os.getenv("APPLE_MUSIC_USER_TOKEN"),
+    "Origin": "https://music.apple.com",
+    "Priority": "u=3, i",
+    "Referer": "https://music.apple.com/",
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "same-site",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1.1 Safari/605.1.15",
+}
 
 
 def get_many_apple_music_catalog_songs_by_isrc(isrcs: list[str]):
     # max 25 at a time
-    url = f"https://api.music.apple.com/v1/catalog/{ITUNES_STOREFRONT}/songs"
+    url = f"https://amp-api.music.apple.com/v1/catalog/{ITUNES_STOREFRONT}/songs"
     params = {
         "filter[isrc]": ",".join(isrcs),
     }
-    headers = {
-        "Authorization": f"Bearer {os.getenv('APPLE_DEVELOPER_TOKEN')}",
-        "Music-User-Token": os.getenv("APPLE_MUSIC_USER_TOKEN"),
-    }
 
-    res = requests.get(url, params=params, headers=headers)
+    res = requests.get(url, params=params, headers=APPLE_MUSIC_REQUEST_HEADERS)
     res.raise_for_status()
 
     return res.json()["data"]
@@ -75,8 +84,11 @@ def create_playlist(
     }
 
     res = requests.post(
-        "https://amp-api.music.apple.com/v1/me/library/playlists?art%5Burl%5D=f&l=en-US",
+        "https://amp-api.music.apple.com/v1/me/library/playlists",
         json=playlist,
+        headers=APPLE_MUSIC_REQUEST_HEADERS,
+        params={"art[url]": "f", "l": "en-US"},
+    )
     )
 
     created_playlist_id: str = res.json()["data"][0]["id"]
